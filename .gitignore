@@ -1,0 +1,17 @@
+# Environment / secrets
+.env
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Build artifacts — regenerate via python train_model.py
+model/model.joblib
+model/*.tmp
+
+# Kaggle dataset (144 MB — download manually, see README)
+data/*.csv

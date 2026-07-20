@@ -1,0 +1,16 @@
+fastapi
+uvicorn[standard]
+kafka-python>=2.2.0
+scikit-learn
+pandas
+joblib
+sqlalchemy
+psycopg2-binary
+plotly
+dash
+requests
+python-dotenv
+
+# dev
+pytest
+httpx
