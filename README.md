@@ -1,178 +1,150 @@
-# fraud-detection-api
+# 🚨 Fraud Detection API — Real-Time ML Fraud Scoring
 
-Real-time credit card fraud detection: a Kafka pipeline streams simulated
-transactions, an Isolation Forest scores each one for fraud risk,
-high-risk transactions trigger a Telegram alert, and a Plotly Dash
-dashboard visualizes the live feed. A FastAPI service exposes the same
-scoring path for manual testing and a retrain trigger.
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-API-009688?style=flat-square&logo=fastapi&logoColor=white)
+![Kafka](https://img.shields.io/badge/Apache_Kafka-Streaming-231F20?style=flat-square&logo=apachekafka&logoColor=white)
+![scikit-learn](https://img.shields.io/badge/scikit--learn-Isolation_Forest-F7931E?style=flat-square&logo=scikitlearn&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?style=flat-square&logo=postgresql&logoColor=white)
+![Tests](https://img.shields.io/badge/Tests-26_passing-brightgreen?style=flat-square)
 
-## Architecture
+---
+
+## ❓ Problem
+
+Fraud detection needs to happen the instant a transaction occurs — not hours or days later in a batch report. Most fraud datasets are also severely imbalanced (real fraud is often <0.2% of transactions), which rules out simple supervised approaches and makes false-alarm control a genuine engineering challenge, not just a modeling afterthought.
+
+---
+
+## 💡 Solution
+
+A streaming pipeline that scores every transaction the moment it arrives, using unsupervised anomaly detection rather than a label-hungry classifier:
+
+- **Kafka-based streaming** — transactions flow through a message broker, decoupling "who generates transactions" from "who scores them" — the same pattern real fraud systems use at scale
+- **Isolation Forest** for anomaly scoring — an unsupervised model well-suited to rare, hard-to-label fraud patterns, calibrated against the real Kaggle Credit Card Fraud dataset (empirically tuned so ~7.5% of real frauds are caught at a threshold that keeps false alarms to ~0.03%)
+- **Instant alerting** — high-risk transactions trigger a Telegram alert the moment the consumer scores them
+- **Full observability** — every transaction is logged (fraud or not) for a live dashboard and later evaluation against ground truth
+
+---
+
+## ✨ Features
+
+- ⚡ **Real-time Kafka pipeline** — producer simulates a live transaction feed, consumer scores and logs every message as it arrives
+- 🧠 **Isolation Forest ML model** — unsupervised anomaly detection, trained on 284,807 real credit card transactions
+- 📊 **Live Plotly Dash dashboard** — auto-refreshing risk score distribution, cumulative fraud detections, and a full confusion matrix (true/false positives) evaluated against ground truth
+- 🚨 **Telegram fraud alerts** — instant notification the moment a transaction crosses the risk threshold
+- 🛠️ **Manual scoring endpoint** — submit any transaction via REST API for immediate scoring, no Kafka required for testing
+- 🔄 **On-demand retraining** — `POST /model/retrain` re-trains and atomically swaps the model with zero downtime
+- 🛡️ **Fails safe** — a malformed message or failed alert never crashes the pipeline; every failure is logged and the system keeps running
+- 🐳 **Six-service Docker stack** — Kafka, PostgreSQL, API, producer, consumer, and dashboard, all orchestrated with one command
+
+---
+
+## 🛠️ Tech Stack
+
+| Layer | Tool | Purpose |
+|---|---|---|
+| Streaming | Apache Kafka (KRaft mode) | Real-time transaction feed, decoupled producer/consumer |
+| ML | scikit-learn (Isolation Forest) | Unsupervised fraud anomaly scoring |
+| API | FastAPI | Manual scoring, history queries, retrain trigger |
+| Database | PostgreSQL | Every scored transaction logged for dashboard + evaluation |
+| Dashboard | Plotly Dash | Live-updating charts and confusion matrix |
+| Alerts | Telegram Bot API | Instant fraud notifications |
+| Deployment | Docker Compose | 6 services orchestrated together |
+| Testing | pytest | 26 tests — training, streaming, alerts, API, dashboard transforms |
+
+---
+
+## 📡 Architecture
 
 ```
-                        ┌──────────────┐
-                        │  data/        │
-                        │  creditcard   │
-                        │  .csv         │
-                        └──────┬───────┘
-                               │ read on an interval
-                               ▼
-                        ┌──────────────┐
-                        │  producer     │  publishes JSON rows
-                        └──────┬───────┘
-                               ▼
-                        ┌──────────────┐
-                        │ Kafka topic   │  "transactions"
-                        │ (KRaft)       │
-                        └──────┬───────┘
-                               │ subscribes
-                               ▼
-                        ┌──────────────┐      ┌───────────────┐
-                        │  consumer     │─────▶│ model.joblib   │  score
-                        │               │      │ (Isolation     │
-                        │               │◀─────│  Forest)       │
-                        └──────┬───────┘      └───────────────┘
-                               │ log every transaction
-                               ▼                              above threshold
-                        ┌──────────────┐                     ┌─────────────┐
-                        │  PostgreSQL   │                     │  Telegram   │
-                        │  transactions │                     │  alert      │
-                        └──────┬───────┘                     └─────────────┘
-                               ▲
-                               │ GET /transactions, /transactions/stats
-                        ┌──────┴───────┐        ┌──────────────┐
-                        │  FastAPI      │◀──────▶│  Dash          │
-                        │  (app)        │  polls │  dashboard     │
-                        └──────┬───────┘  (4s)   └──────────────┘
-                               │
-                   POST /transactions (manual scoring, same path as consumer)
-                   POST /model/retrain (re-trains + atomically swaps model.joblib)
+data/creditcard.csv → producer → Kafka topic "transactions"
+                                        │
+                                        ▼
+                                    consumer ──► IsolationForest (score)
+                                        │              │
+                                        ▼              ▼ (if risky)
+                                  PostgreSQL      Telegram alert
+                                        ▲
+                                        │
+                              FastAPI (GET /transactions, /stats)
+                                        ▲
+                                        │  polls every 4s
+                                  Plotly Dash dashboard
 ```
 
-The API never queries Postgres from the dashboard's side — the dashboard
-only talks to the FastAPI service, keeping storage details behind one
-boundary. The producer and consumer are independent processes: the
-producer only publishes, the consumer only reads and scores.
+Manual path: `POST /transactions` scores a single transaction through the exact same model, immediately — no Kafka required for testing.
 
-## Getting started
+---
 
-### 1. One-time step: download the dataset and train the model
-
-The training dataset (144 MB, [Kaggle Credit Card Fraud dataset](https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud))
-is not bundled and is not auto-downloaded inside Docker — it's excluded
-from the build context (`.dockerignore`) and from git (`.gitignore`).
-This is a genuine one-time manual step, unlike everything else in this
-project:
-
-1. Download `creditcard.csv` from Kaggle (requires a free account).
-2. Place it at `data/creditcard.csv`.
-3. Install dependencies and train, on the host (not in Docker):
-   ```bash
-   pip install -r requirements.txt
-   python train_model.py
-   ```
-   This writes `model/model.joblib`, prints a training summary
-   (~284,807 transactions, 492 labeled frauds), and takes a few seconds.
-
-Both `data/creditcard.csv` and `model/model.joblib` are bind-mounted
-into the containers (see `docker-compose.yml`), so anything you train
-or download on the host is immediately visible inside Docker with no
-rebuild.
-
-### 2. Configure environment variables
+## ⚡ Quick Start
 
 ```bash
-cp .env.example .env
+git clone https://github.com/rizalcodes/fraud-detection-api.git
+cd fraud-detection-api
 ```
 
-Fill in real values for `DB_PASSWORD`, and if you want live Telegram
-alerts, `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` (see below). The
-Kafka/DB/API URL defaults are already correct for the Docker Compose
-network.
-
-### 3. Run the full stack
-
+**One-time step — download the dataset and train the model:**
+1. Download `creditcard.csv` from the [Kaggle Credit Card Fraud dataset](https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud)
+2. Place it at `data/creditcard.csv`
+3. Train:
 ```bash
+pip install -r requirements.txt
+python train_model.py
+```
+
+**Run the full stack:**
+```bash
+cp .env.example .env   # set DB_PASSWORD, optionally TELEGRAM_BOT_TOKEN/CHAT_ID
 docker compose up --build
 ```
 
-Six services come up, in dependency order, all healthy with no further
-manual steps:
+- **Dashboard:** http://localhost:8050
+- **API docs (Swagger):** http://localhost:8000/docs
 
-| Service | Role | Port |
-|---|---|---|
-| `kafka` | Kafka broker, KRaft mode | 9092 (host), 19092 (internal) |
-| `db` | PostgreSQL 16 | 5432 |
-| `app` | FastAPI: scoring, history, retrain | 8000 |
-| `producer` | Streams the dataset onto Kafka (finite run — see below) | — |
-| `consumer` | Scores + logs every transaction, fires alerts | — |
-| `dashboard` | Plotly Dash live view | 8050 |
-
-- **Dashboard**: http://localhost:8050 — the visual live view.
-- **API docs (Swagger UI)**: http://localhost:8000/docs — interactive
-  API reference, generated by FastAPI.
-- **Health check**: http://localhost:8000/health
-
-The `producer` service is a *finite* run — it publishes
-`PRODUCER_LIMIT` transactions (default 100, `.env.example`) and exits;
-it does not restart automatically. To stream more:
-
-```bash
-docker compose run --rm producer python -m streaming.producer --limit 200 --interval 0.5
-# or the full 284,807-row dataset:
-docker compose run --rm producer python -m streaming.producer --limit 0 --interval 0.05
-```
-
-### 4. Testing Telegram alerts
-
-1. Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`, then
-   `docker compose up -d` to pick up the new environment.
-2. Submit a transaction likely to score above `FRAUD_THRESHOLD` (0.7 by
-   default) — the fastest way is to pull the dataset's highest-risk
-   labeled fraud and POST it:
-   ```bash
-   python -c "
-   import json, pandas as pd
-   from model.score import load_model, score_transaction
-   model = load_model()
-   df = pd.read_csv('data/creditcard.csv')
-   best = max(
-       df[df['Class'] == 1].to_dict('records'),
-       key=lambda r: score_transaction({k: v for k, v in r.items() if k != 'Class'}, model),
-   )
-   print(json.dumps(best))
-   " > /tmp/sample_fraud.json
-
-   curl -X POST http://localhost:8000/transactions \
-     -H "Content-Type: application/json" \
-     -d @/tmp/sample_fraud.json
-   ```
-3. A `predicted_fraud: true, alert_sent: true` response means the alert
-   fired — check the Telegram chat for the "🚨 FRAUD ALERT 🚨" message.
-   The full dataset streamed via the producer (`--limit 0`) will also
-   trigger alerts naturally as it passes the ~37 highest-risk labeled
-   frauds.
-
-### 5. Retraining the model
-
-```bash
-curl -X POST http://localhost:8000/model/retrain
-```
-
-Re-runs training against the current `data/creditcard.csv` (e.g. after
-you've updated the file) and atomically swaps `model/model.joblib` —
-no request ever sees a half-written model file, and the API's cached
-model is invalidated so the very next request uses the freshly trained
-one. Returns a summary:
-
-```json
-{"status": "retrained", "training_rows": 284807, "seconds_taken": 5.53, "model_path": "/app/model/model.joblib"}
-```
-
-If the dataset file is missing, this returns a `400` with a clear
-message rather than a `500` crash.
-
-## Test
+### Tests
 
 ```bash
 pytest
 ```
+
+26 tests, all fast — synthetic data and mocked HTTP calls, no Kafka/Postgres/real model needed.
+
+---
+
+## 📁 Project Structure
+
+```
+fraud-detection-api/
+├── train_model.py          # Standalone training entry point
+├── app.py                    # Plotly Dash dashboard
+├── api/
+│   ├── main.py                 # FastAPI: health, submit, history, retrain
+│   └── deps.py                    # Cached model + DB session dependencies
+├── streaming/
+│   ├── producer.py                  # Publishes dataset rows to Kafka
+│   └── consumer.py                    # Scores + logs + alerts on every message
+├── model/
+│   ├── train.py                         # Isolation Forest training logic
+│   └── score.py                           # Pure scoring function
+├── dashboard/
+│   ├── api_client.py                        # Dashboard's HTTP client to the API
+│   └── transforms.py                          # Pure chart/table data transforms
+├── alerts/telegram.py                            # Fraud alert delivery
+├── tests/                                          # 26 tests
+├── docker-compose.yml                                # 6 services
+└── Dockerfile
+```
+
+---
+
+## 👤 Author
+
+**Rizal**
+
+[![Portfolio](https://img.shields.io/badge/Portfolio-rizalcodes.github.io-0A66C2?style=flat-square)](https://rizalcodes.github.io)
+[![GitHub](https://img.shields.io/badge/GitHub-rizalcodes-181717?style=flat-square&logo=github)](https://github.com/rizalcodes)
+[![Twitter/X](https://img.shields.io/badge/X-@rizalcodes_-000000?style=flat-square&logo=x)](https://x.com/rizalcodes_)
+
+---
+
+*Built with Kafka, Isolation Forest, and the conviction that fraud detection only matters if it happens before the transaction clears.*
